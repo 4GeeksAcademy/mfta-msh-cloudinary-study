@@ -8,7 +8,7 @@ from flask_swagger import swagger
 from flask_bcrypt import Bcrypt
 
 from api.utils import APIException, generate_sitemap
-from api.models import db
+from api.models import db, User, Product
 from api.routes import api
 from api.admin import setup_admin
 from api.commands import setup_commands
@@ -70,6 +70,36 @@ def serve_any_other_file(path):
 
 
 # User register endpoint
+@app.route('/register', methods=['POST'])
+def register_user():
+    """
+    Body example:
+    {
+        "email": "user1@email.com",
+        "password": "user1password",
+        "role": "user"  # optional, defaults to "user"
+    }
+    """
+
+    body = request.get_json()
+    if not body or "email" not in body or "password" not in body:
+        return jsonify({"error": "Missing email or password"}), 400
+    email = body["email"]
+    password = body["password"]
+    role = body.get("role", "user")
+
+    user = User.query.filter_by(email=email).first()
+    if user:
+        return jsonify({"error": "User already exists"}), 400
+    
+    if role not in ["user", "admin"]:
+        return jsonify({"error": "Invalid role"}), 400
+    
+    hashed_password = bcrypt.generate_password_hash(password).decode('utf-8')
+    new_user = User(email=email, password=hashed_password, role=role)
+    db.session.add(new_user)
+    db.session.commit()
+    return jsonify({"message": "User registered successfully", "user": new_user.serialize() }), 201
 
 
 # this only runs if `$ python src/main.py` is executed
