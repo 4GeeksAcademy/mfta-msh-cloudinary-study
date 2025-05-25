@@ -6,6 +6,7 @@ from flask import Flask, request, jsonify, url_for, send_from_directory
 from flask_migrate import Migrate
 from flask_swagger import swagger
 from flask_bcrypt import Bcrypt
+from flask_jwt_extended import JWTManager, get_jwt_identity, jwt_required, create_access_token
 
 from api.utils import APIException, generate_sitemap
 from api.models import db, User, Product
@@ -33,6 +34,10 @@ else:
 app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
 MIGRATE = Migrate(app, db, compare_type=True)
 db.init_app(app)
+
+# JWT configuration
+app.config["JWT_SECRET_KEY"] = os.getenv("JWT_SECRET_KEY")
+jwt = JWTManager(app)
 
 # add the admin
 setup_admin(app)
@@ -100,6 +105,31 @@ def register_user():
     db.session.add(new_user)
     db.session.commit()
     return jsonify({"message": "User registered successfully", "user": new_user.serialize() }), 201
+
+
+# User login endpoint with JWT
+@app.route('/login', methods=['POST'])
+def login_user():
+    """
+    Body example:
+    {
+        "email": "user1@email.com",
+        "password": "user1password"
+    }
+    """
+    body = request.get_json()
+    if not body or "email" not in body or "password" not in body:
+        return jsonify({"error": "Missing email or password"}), 400
+
+    email = body["email"]
+    password = body["password"]
+
+    user = User.query.filter_by(email=email).first()
+    if not user or not bcrypt.check_password_hash(user.password, password):
+        return jsonify({"error": "Invalid email or password"}), 401
+
+    access_token = create_access_token(identity=str(user.id))
+    return jsonify({"access_token": access_token, "user": user.serialize()}), 200
 
 
 # this only runs if `$ python src/main.py` is executed
