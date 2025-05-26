@@ -7,14 +7,14 @@ from flask_migrate import Migrate
 from flask_swagger import swagger
 from flask_bcrypt import Bcrypt
 from flask_jwt_extended import JWTManager, get_jwt_identity, jwt_required, create_access_token
-# Relevant for this Study Project ###################################
+# Relevant for this Study Project ##############################################################################################
 import cloudinary
 import cloudinary.uploader
 from cloudinary.utils import cloudinary_url
-####################################################################
+################################################################################################################################
 
 from api.utils import APIException, generate_sitemap
-from api.models import db, User, Product
+from api.models import db, User, Product, ProductImage
 from api.routes import api
 from api.admin import setup_admin
 from api.commands import setup_commands
@@ -42,7 +42,7 @@ db.init_app(app)
 app.config["JWT_SECRET_KEY"] = os.getenv("JWT_SECRET_KEY")
 jwt = JWTManager(app)
 
-# Relevant for this Study Project ##########################################
+# Relevant for this Study Project ##############################################################################################
 # Cloudinary configuration
 # Make sure to set your Cloudinary credentials in the environment variables      
 cloudinary.config( 
@@ -51,7 +51,7 @@ cloudinary.config(
     api_secret = os.getenv("CLOUDINARY_API_SECRET", "your_api_secret"),
     secure=True
 )
-############################################################################
+################################################################################################################################
 
 # add the admin
 setup_admin(app)
@@ -88,33 +88,70 @@ def serve_any_other_file(path):
 @app.route('/register', methods=['POST'])
 def register_user():
     """
-    Body example:
+    Body example (multipart/form-data):
     {
         "email": "user1@email.com",
         "password": "user1password",
         "role": "user"  # optional, defaults to "user"
+        "image": "image_file"  # optional, file upload for profile picture
     }
     """
-
-    body = request.get_json()
+    body = request.form
     if not body or "email" not in body or "password" not in body:
         return jsonify({"error": "Missing email or password"}), 400
     email = body["email"]
     password = body["password"]
-    role = body.get("role", "user")
-
-    user = User.query.filter_by(email=email).first()
-    if user:
-        return jsonify({"error": "User already exists"}), 400
-    
+    role = body.get("role", "user")  # default to "user" if not provided
     if role not in ["user", "admin"]:
-        return jsonify({"error": "Invalid role"}), 400
-    
+        return jsonify({"error": "Invalid role, must be 'user' or 'admin'"}), 400
+    # Check if the user already exists
+    existing_user = User.query.filter_by(email=email).first()
+    if existing_user:
+        return jsonify({"error": "User with this email already exists"}), 400
+    # Validate password length
+    if len(password) < 6:
+        return jsonify({"error": "Password must be at least 6 characters long"}), 400
+    # Hash the password
     hashed_password = bcrypt.generate_password_hash(password).decode('utf-8')
-    new_user = User(email=email, password=hashed_password, role=role)
-    db.session.add(new_user)
-    db.session.commit()
-    return jsonify({"message": "User registered successfully", "user": new_user.serialize() }), 201
+
+    # Check if the image file is present
+    if 'image' in request.files:
+        # Check if the image file is valid
+        image_file = request.files['image']
+        if image_file.filename == '':
+            return jsonify({"error": "No selected file"}), 400
+        # Validate image file type
+        if not image_file.filename.lower().endswith(('.png', '.jpg', '.jpeg')):
+            return jsonify({"error": "Invalid image format"}), 400
+        # Validate image file size (max 2MB)
+        if image_file.content_length > 2 * 1024 * 1024:
+            return jsonify({"error": "Image file too large, must be less than 2MB"}), 400
+
+        try:
+        # Relevant for this Study Project ##############################################################################################
+            # Upload one image to Cloudinary
+            upload_result = cloudinary.uploader.upload(image_file, folder="/Practice-Projects/cloudinary-study-py")
+            image_url = upload_result['secure_url']
+            image_public_id = upload_result['public_id']
+        ################################################################################################################################
+        except Exception as e:
+            return jsonify({"error": f"Failed to upload image: {str(e)}"}), 500
+    else:
+        image_url = "https://res.cloudinary.com/dbiyjz0g3/image/upload/v1748279029/Practice-Projects/cloudinary-study-py/avatar_f6r5cf.jpg"
+        image_public_id = None
+    
+    # Create the new user
+    new_user = User(email=email, password=hashed_password, role=role, picture_url=image_url, picture_public_id=image_public_id)
+    try:
+        db.session.add(new_user)
+        db.session.commit()
+
+        return jsonify({"message": "User registered successfully"}), 201
+    
+    except Exception as e:
+        db.session.rollback()
+        return jsonify({"error": f"Failed to register user: {str(e)}"}), 500
+    
 
 
 # User login endpoint with JWT
@@ -142,7 +179,6 @@ def login_user():
     return jsonify({"access_token": access_token, "user": user.serialize()}), 200
 
 
-# Relevant for this Study Project ########################################################
 # Product create endpoint
 # Images: receive an image file and upload it to Cloudinary
 @app.route('/products', methods=['POST'])
@@ -154,7 +190,7 @@ def create_product():
         "name": "Product Name",
         "description": "Product Description",
         "price": 100.00,
-        "image": "image_file"  # file upload
+        "images": list of image files (optional, can upload up to 5 images)
     }
     """
     # Check if the user is an admin
@@ -186,43 +222,68 @@ def create_product():
     description = body["description"]
     price = float(body["price"])
 
-    # Check if the image file is present
-    if 'image' not in request.files:
-        return jsonify({"error": "Missing image file"}), 400
+    images_urls = []
 
-    # Get the image file from the request
-    image_file = request.files['image']
-    if image_file.filename == '':
-        return jsonify({"error": "No selected file"}), 400
-    
-    # Validate image file type
-    if not image_file.filename.lower().endswith(('.png', '.jpg', '.jpeg')):
-        return jsonify({"error": "Invalid image format"}), 400
-    
-    # Validate image file size (max 3MB)
-    if image_file.content_length > 3 * 1024 * 1024:
-        return jsonify({"error": "Image file too large, must be less than 3MB"}), 400
-    
+    # Check if images are provided
+    if 'images' not in request.files or len(request.files.getlist('images')) == 0:
+        images_urls = [
+            {
+                "url": "https://res.cloudinary.com/dbiyjz0g3/image/upload/v1748280952/Practice-Projects/cloudinary-study-py/no_image_available_vh4dpj.png",
+                "public_id": None
+            }
+        ]
+    else:
+        image_files = request.files.getlist('images')
+        if len(image_files) > 5:
+            return jsonify({"error": "You can upload a maximum of 5 images"}), 400
+        
+        for image_file in image_files:
+            if image_file.filename == '':
+                return jsonify({"error": "No selected file"}), 400
+            
+            # Validate image file type
+            if not image_file.filename.lower().endswith(('.png', '.jpg', '.jpeg')):
+                return jsonify({"error": "Invalid image format"}), 400
+            
+            # Validate image file size (max 3MB)
+            if image_file.content_length > 3 * 1024 * 1024:
+                return jsonify({"error": "Image file too large, must be less than 3MB"}), 400
+            
+            try:
+                # Upload the image to Cloudinary
+                upload_result = cloudinary.uploader.upload(image_file, folder="/Practice-Projects/cloudinary-study-py")
+                images_urls.append({
+                    "url": upload_result['secure_url'],
+                    "public_id": upload_result['public_id']
+                })
+            except Exception as e:
+                return jsonify({"error": f"Failed to upload image: {str(e)}"}), 500
+
+
+    # Create a new product instance
+    new_product = Product(name=name, description=description, price=price)
     try:
-        # First, create the product without the image
-        # This allows us to handle the image upload separately (e.g., if the product creation fails, we don't want to leave an image in Cloudinary)
-        new_product = Product(name=name, description=description, price=price)
         db.session.add(new_product)
-        
-        # Then upload image to Cloudinary
-        upload_result = cloudinary.uploader.upload(image_file, folder="/Practice-Projects/cloudinary-study-py")
-        print(upload_result)
-        image_url = upload_result['secure_url']
-        image_public_id = upload_result['public_id']
+        db.session.commit() # After committing the product, we can get its ID to associate images
+    except Exception as e:
+        db.session.rollback()
+        return jsonify({"error": f"Failed to create product: {str(e)}"}), 500
 
-        # Update the product with the image URL
-        new_product.image_url = image_url
-        new_product.image_public_id = image_public_id
+    # Save the images to the database
+    for image_data in images_urls:
+        new_image = ProductImage(
+            product_id=new_product.id,
+            url=image_data["url"],
+            public_id=image_data["public_id"]
+        )
+        db.session.add(new_image)
+    try:
         db.session.commit()
-        
         return jsonify({"message": "Product created successfully", "product": new_product.serialize()}), 201
     except Exception as e:
-        return jsonify({"error": f"Failed to upload product: {str(e)}"}), 500
+        db.session.rollback()
+        return jsonify({"error": f"Failed to create product: {str(e)}"}), 500
+    
     
 
 # Product update endpoint
@@ -235,7 +296,8 @@ def update_product(product_id):
         "name": "Updated Product Name",
         "description": "Updated Product Description",
         "price": 150.00,
-        "image": "image_file"
+        "image_files_to_add": list of image files (optional, can upload up to 5 new images),
+        "image_ids_to_delete": list of image IDs to delete (optional)
     }
     All fields are optional, but at least one must be provided.
     """
@@ -274,36 +336,70 @@ def update_product(product_id):
         except ValueError:
             return jsonify({"error": "Invalid price format"}), 400
 
-    # Handle image upload if provided
-    if 'image' in request.files:
-        image_file = request.files['image']
-        if image_file.filename == '':
-            return jsonify({"error": "No selected file"}), 400
-        
-        # Validate image file type
-        if not image_file.filename.lower().endswith(('.png', '.jpg', '.jpeg')):
-            return jsonify({"error": "Invalid image format"}), 400
-        
-        # Validate image file size (max 3MB)
-        if image_file.content_length > 3 * 1024 * 1024:
-            return jsonify({"error": "Image file too large, must be less than 3MB"}), 400
-        
+    # Handle image updates
+    image_files = request.files.getlist('image_files_to_add')
+    image_ids_to_delete = request.form.getlist('image_ids_to_delete')
+    if len(image_files) > 5:
+        return jsonify({"error": "You can upload a maximum of 5 images"}), 400
+    if product.images and (len(product.images) + len(image_files) - len(image_ids_to_delete)) > 5:
+        return jsonify({"error": "Total images cannot exceed 5"}), 400
+    
+    # Delete specified images
+    for image_id in image_ids_to_delete:
+        image = ProductImage.query.get(image_id)
+        if not image or image.product_id != product_id:
+            return jsonify({"error": f"Image with ID {image_id} not found for this product"}), 404
         try:
-            # Delete the old image from Cloudinary if it exists
-            if product.image_public_id:
-                cloudinary.uploader.destroy(product.image_public_id)
-
-            # Upload the new image to Cloudinary
-            upload_result = cloudinary.uploader.upload(image_file, folder="/Practice-Projects/cloudinary-study-py")
-            product.image_url = upload_result['secure_url']
-            product.image_public_id = upload_result['public_id']
+            db.session.delete(image)
+            db.session.commit()
+            # Delete the image from Cloudinary if it exists
+            if image.public_id:
+                cloudinary.uploader.destroy(image.public_id)
         except Exception as e:
-            return jsonify({"error": f"Failed to upload image: {str(e)}"}), 500
+            db.session.rollback()
+            return jsonify({"error": f"Failed to delete image: {str(e)}"}), 500
+        
+    # Add new images
+    images_urls = []
+    if image_files:
+        for image_file in image_files:
+            if image_file.filename == '':
+                return jsonify({"error": "No selected file"}), 400
+            
+            # Validate image file type
+            if not image_file.filename.lower().endswith(('.png', '.jpg', '.jpeg')):
+                return jsonify({"error": "Invalid image format"}), 400
+            
+            # Validate image file size (max 3MB)
+            if image_file.content_length > 3 * 1024 * 1024:
+                return jsonify({"error": "Image file too large, must be less than 3MB"}), 400
+            
+            try:
+                # Upload the image to Cloudinary
+                upload_result = cloudinary.uploader.upload(image_file, folder="/Practice-Projects/cloudinary-study-py")
+                images_urls.append({
+                    "url": upload_result['secure_url'],
+                    "public_id": upload_result['public_id']
+                })
+            except Exception as e:
+                return jsonify({"error": f"Failed to upload image: {str(e)}"}), 500
+
+        # Save the new images to the database
+        for image_data in images_urls:
+            new_image = ProductImage(
+                product_id=product.id,
+                url=image_data["url"],
+                public_id=image_data["public_id"]
+            )
+            db.session.add(new_image)
     try:
         db.session.commit()
         return jsonify({"message": "Product updated successfully", "product": product.serialize()}), 200
     except Exception as e:
+        db.session.rollback()
         return jsonify({"error": f"Failed to update product: {str(e)}"}), 500
+
+    
     
 
 # Product delete endpoint
@@ -327,9 +423,12 @@ def delete_product(product_id):
         db.session.delete(product)
         db.session.commit()
 
-        # Delete the image from Cloudinary if it exists
-        if product.image_public_id:
-            cloudinary.uploader.destroy(product.image_public_id)
+        # Delete the images from Cloudinary if it exists
+        if product.images:
+            for image in product.images:
+                if image.public_id:
+                    cloudinary.uploader.destroy(image.public_id)
+                    
         return jsonify({"message": "Product deleted successfully"}), 200
     except Exception as e:
         return jsonify({"error": f"Failed to delete product: {str(e)}"}), 500
