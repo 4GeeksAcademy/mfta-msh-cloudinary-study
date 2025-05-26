@@ -7,17 +7,17 @@ from flask_migrate import Migrate
 from flask_swagger import swagger
 from flask_bcrypt import Bcrypt
 from flask_jwt_extended import JWTManager, get_jwt_identity, jwt_required, create_access_token
+# Relevant for this Study Project ###################################
 import cloudinary
 import cloudinary.uploader
 from cloudinary.utils import cloudinary_url
+####################################################################
 
 from api.utils import APIException, generate_sitemap
 from api.models import db, User, Product
 from api.routes import api
 from api.admin import setup_admin
 from api.commands import setup_commands
-
-# from models import Person
 
 ENV = "development" if os.getenv("FLASK_DEBUG") == "1" else "production"
 static_file_dir = os.path.join(os.path.dirname(
@@ -42,6 +42,7 @@ db.init_app(app)
 app.config["JWT_SECRET_KEY"] = os.getenv("JWT_SECRET_KEY")
 jwt = JWTManager(app)
 
+# Relevant for this Study Project ##########################################
 # Cloudinary configuration
 # Make sure to set your Cloudinary credentials in the environment variables      
 cloudinary.config( 
@@ -50,7 +51,7 @@ cloudinary.config(
     api_secret = os.getenv("CLOUDINARY_API_SECRET", "your_api_secret"),
     secure=True
 )
-
+############################################################################
 
 # add the admin
 setup_admin(app)
@@ -141,13 +142,14 @@ def login_user():
     return jsonify({"access_token": access_token, "user": user.serialize()}), 200
 
 
+# Relevant for this Study Project ########################################################
 # Product create endpoint
 # Images: receive an image file and upload it to Cloudinary
 @app.route('/products', methods=['POST'])
 @jwt_required()
 def create_product():
     """
-    Body example:
+    Body example (multipart/form-data):
     {
         "name": "Product Name",
         "description": "Product Description",
@@ -165,6 +167,11 @@ def create_product():
     body = request.form
     if not body or "name" not in body or "description" not in body or "price" not in body:
         return jsonify({"error": "Missing product data"}), 400
+    
+    # Check if a product with the same name already exists
+    existing_product = Product.query.filter_by(name=body["name"]).first()
+    if existing_product:
+        return jsonify({"error": "Product with this name already exists"}), 400
     
     # Validate price
     try:
@@ -216,6 +223,141 @@ def create_product():
         return jsonify({"message": "Product created successfully", "product": new_product.serialize()}), 201
     except Exception as e:
         return jsonify({"error": f"Failed to upload product: {str(e)}"}), 500
+    
+
+# Product update endpoint
+@app.route('/products/<int:product_id>', methods=['PUT'])
+@jwt_required()
+def update_product(product_id):
+    """
+    Body example (multipart/form-data):
+    {
+        "name": "Updated Product Name",
+        "description": "Updated Product Description",
+        "price": 150.00,
+        "image": "image_file"
+    }
+    All fields are optional, but at least one must be provided.
+    """
+    # Check if the user is an admin
+    current_user = get_jwt_identity()
+    user = User.query.get(int(current_user))
+    if not user or user.role != "admin":
+        return jsonify({"error": "Unauthorized"}), 403
+
+    product = Product.query.get(product_id)
+    if not product:
+        return jsonify({"error": "Product not found"}), 404
+
+    body = request.form
+    if not body or ("name" not in body and "description" not in body and "price" not in body and 'image' not in request.files):
+        return jsonify({"error": "Missing product data"}), 400
+    
+    # Update product fields if provided
+    if "name" in body:
+        # Check if a product with the same name already exists
+        existing_product = Product.query.filter_by(name=body["name"]).first()
+        if existing_product and existing_product.id != product_id:
+            return jsonify({"error": "Product with this name already exists"}), 400
+        # Update the product name
+        product.name = body["name"]
+    
+    if "description" in body:
+        product.description = body["description"]
+    
+    if "price" in body:
+        try:
+            price = float(body["price"])
+            if price <= 0:
+                return jsonify({"error": "Price must be a positive number"}), 400
+            product.price = price
+        except ValueError:
+            return jsonify({"error": "Invalid price format"}), 400
+
+    # Handle image upload if provided
+    if 'image' in request.files:
+        image_file = request.files['image']
+        if image_file.filename == '':
+            return jsonify({"error": "No selected file"}), 400
+        
+        # Validate image file type
+        if not image_file.filename.lower().endswith(('.png', '.jpg', '.jpeg')):
+            return jsonify({"error": "Invalid image format"}), 400
+        
+        # Validate image file size (max 3MB)
+        if image_file.content_length > 3 * 1024 * 1024:
+            return jsonify({"error": "Image file too large, must be less than 3MB"}), 400
+        
+        try:
+            # Delete the old image from Cloudinary if it exists
+            if product.image_public_id:
+                cloudinary.uploader.destroy(product.image_public_id)
+
+            # Upload the new image to Cloudinary
+            upload_result = cloudinary.uploader.upload(image_file, folder="/Practice-Projects/cloudinary-study-py")
+            product.image_url = upload_result['secure_url']
+            product.image_public_id = upload_result['public_id']
+        except Exception as e:
+            return jsonify({"error": f"Failed to upload image: {str(e)}"}), 500
+    try:
+        db.session.commit()
+        return jsonify({"message": "Product updated successfully", "product": product.serialize()}), 200
+    except Exception as e:
+        return jsonify({"error": f"Failed to update product: {str(e)}"}), 500
+    
+
+# Product delete endpoint
+@app.route('/products/<int:product_id>', methods=['DELETE'])
+@jwt_required()
+def delete_product(product_id):
+    """
+    Deletes a product by ID
+    """
+    # Check if the user is an admin
+    current_user = get_jwt_identity()
+    user = User.query.get(int(current_user))
+    if not user or user.role != "admin":
+        return jsonify({"error": "Unauthorized"}), 403
+
+    product = Product.query.get(product_id)
+    if not product:
+        return jsonify({"error": "Product not found"}), 404
+    
+    try:
+        db.session.delete(product)
+        db.session.commit()
+
+        # Delete the image from Cloudinary if it exists
+        if product.image_public_id:
+            cloudinary.uploader.destroy(product.image_public_id)
+        return jsonify({"message": "Product deleted successfully"}), 200
+    except Exception as e:
+        return jsonify({"error": f"Failed to delete product: {str(e)}"}), 500
+
+############################################################################################# 
+
+# Product list endpoint
+@app.route('/products', methods=['GET'])
+@jwt_required()
+def list_products():
+    """
+    Returns a list of all products
+    """
+    products = Product.query.all()
+    return jsonify({"products": [product.serialize() for product in products]}), 200
+
+
+# Product detail endpoint
+@app.route('/products/<int:product_id>', methods=['GET'])
+@jwt_required()
+def get_product(product_id):
+    """
+    Returns the details of a specific product by ID
+    """
+    product = Product.query.get(product_id)
+    if not product:
+        return jsonify({"error": "Product not found"}), 404
+    return jsonify({"product": product.serialize()}), 200
     
 
 # this only runs if `$ python src/main.py` is executed
