@@ -7,6 +7,9 @@ from flask_migrate import Migrate
 from flask_swagger import swagger
 from flask_bcrypt import Bcrypt
 from flask_jwt_extended import JWTManager, get_jwt_identity, jwt_required, create_access_token
+import cloudinary
+import cloudinary.uploader
+from cloudinary.utils import cloudinary_url
 
 from api.utils import APIException, generate_sitemap
 from api.models import db, User, Product
@@ -39,6 +42,16 @@ db.init_app(app)
 app.config["JWT_SECRET_KEY"] = os.getenv("JWT_SECRET_KEY")
 jwt = JWTManager(app)
 
+# Cloudinary configuration
+# Make sure to set your Cloudinary credentials in the environment variables      
+cloudinary.config( 
+    cloud_name = os.getenv("CLOUDINARY_CLOUD_NAME", "your_cloud_name"),
+    api_key = os.getenv("CLOUDINARY_API_KEY", "your_api_key"),
+    api_secret = os.getenv("CLOUDINARY_API_SECRET", "your_api_secret"),
+    secure=True
+)
+
+
 # add the admin
 setup_admin(app)
 
@@ -49,15 +62,11 @@ setup_commands(app)
 app.register_blueprint(api, url_prefix='/api')
 
 # Handle/serialize errors like a JSON object
-
-
 @app.errorhandler(APIException)
 def handle_invalid_usage(error):
     return jsonify(error.to_dict()), error.status_code
 
 # generate sitemap with all your endpoints
-
-
 @app.route('/')
 def sitemap():
     if ENV == "development":
@@ -131,6 +140,83 @@ def login_user():
     access_token = create_access_token(identity=str(user.id))
     return jsonify({"access_token": access_token, "user": user.serialize()}), 200
 
+
+# Product create endpoint
+# Images: receive an image file and upload it to Cloudinary
+@app.route('/products', methods=['POST'])
+@jwt_required()
+def create_product():
+    """
+    Body example:
+    {
+        "name": "Product Name",
+        "description": "Product Description",
+        "price": 100.00,
+        "image": "image_file"  # file upload
+    }
+    """
+    # Check if the user is an admin
+    current_user = get_jwt_identity()
+    user = User.query.get(int(current_user))
+    if not user or user.role != "admin":
+        return jsonify({"error": "Unauthorized"}), 403
+
+    # Check if the request contains form data
+    body = request.form
+    if not body or "name" not in body or "description" not in body or "price" not in body:
+        return jsonify({"error": "Missing product data"}), 400
+    
+    # Validate price
+    try:
+        price = float(body["price"])
+        if price <= 0:
+            return jsonify({"error": "Price must be a positive number"}), 400
+    except ValueError:
+        return jsonify({"error": "Invalid price format"}), 400
+
+    # Extract product data from the form
+    name = body["name"]
+    description = body["description"]
+    price = float(body["price"])
+
+    # Check if the image file is present
+    if 'image' not in request.files:
+        return jsonify({"error": "Missing image file"}), 400
+
+    # Get the image file from the request
+    image_file = request.files['image']
+    if image_file.filename == '':
+        return jsonify({"error": "No selected file"}), 400
+    
+    # Validate image file type
+    if not image_file.filename.lower().endswith(('.png', '.jpg', '.jpeg')):
+        return jsonify({"error": "Invalid image format"}), 400
+    
+    # Validate image file size (max 3MB)
+    if image_file.content_length > 3 * 1024 * 1024:
+        return jsonify({"error": "Image file too large, must be less than 3MB"}), 400
+    
+    try:
+        # First, create the product without the image
+        # This allows us to handle the image upload separately (e.g., if the product creation fails, we don't want to leave an image in Cloudinary)
+        new_product = Product(name=name, description=description, price=price)
+        db.session.add(new_product)
+        
+        # Then upload image to Cloudinary
+        upload_result = cloudinary.uploader.upload(image_file, folder="/Practice-Projects/cloudinary-study-py")
+        print(upload_result)
+        image_url = upload_result['secure_url']
+        image_public_id = upload_result['public_id']
+
+        # Update the product with the image URL
+        new_product.image_url = image_url
+        new_product.image_public_id = image_public_id
+        db.session.commit()
+        
+        return jsonify({"message": "Product created successfully", "product": new_product.serialize()}), 201
+    except Exception as e:
+        return jsonify({"error": f"Failed to upload product: {str(e)}"}), 500
+    
 
 # this only runs if `$ python src/main.py` is executed
 if __name__ == '__main__':

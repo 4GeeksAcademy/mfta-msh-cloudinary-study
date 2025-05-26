@@ -8,7 +8,7 @@ class UserView(ModelView):
     column_list = ('id', 'email', 'password', 'role')
 
 class ProductView(ModelView):
-    column_list = ('id', 'name', 'description', 'price', 'image_url')
+    column_list = ('id', 'name', 'description', 'price', 'image_url', 'image_public_id')
 
 
 def setup_admin(app):

@@ -33,6 +33,7 @@ class Product(db.Model):
     description: Mapped[str] = mapped_column(String(600), nullable=False)
     price: Mapped[float] = mapped_column(nullable=False)
     image_url: Mapped[str] = mapped_column(String(500), nullable=True)
+    image_public_id: Mapped[str] = mapped_column(String(200), nullable=True)
 
     def serialize(self):
         return {
@@ -41,6 +42,7 @@ class Product(db.Model):
             "description": self.description,
             "price": self.price,
             "image_url": self.image_url,
+            "image_public_id": self.image_public_id # Useful for deleting the image from Cloudinary
         }
 
     def __repr__(self):
