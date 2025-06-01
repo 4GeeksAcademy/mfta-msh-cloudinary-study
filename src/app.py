@@ -7,6 +7,7 @@ from flask_migrate import Migrate
 from flask_swagger import swagger
 from flask_bcrypt import Bcrypt
 from flask_jwt_extended import JWTManager, get_jwt_identity, jwt_required, create_access_token
+from flask_cors import CORS
 # Relevant for this Study Project ##############################################################################################
 import cloudinary
 import cloudinary.uploader
@@ -25,6 +26,8 @@ static_file_dir = os.path.join(os.path.dirname(
 app = Flask(__name__)
 app.url_map.strict_slashes = False
 bcrypt = Bcrypt(app)
+# Enable CORS for all routes
+CORS(app)
 
 # database condiguration
 db_url = os.getenv("DATABASE_URL")
@@ -88,20 +91,18 @@ def serve_any_other_file(path):
 @app.route('/register', methods=['POST'])
 def register_user():
     """
-    Body example (multipart/form-data):
-    {
-        "email": "user1@email.com",
-        "password": "user1password",
-        "role": "user"  # optional, defaults to "user"
-        "image": "image_file"  # optional, file upload for profile picture
-    }
+    Form data example:
+    email= "user@email.com"
+    password= "userpassword"
+    role= "user"  # Optional, default is "user"
+    image= <image file>  # Optional, can upload an image file
     """
-    body = request.form
-    if not body or "email" not in body or "password" not in body:
+    form = request.form
+    if not form or "email" not in form or "password" not in form:
         return jsonify({"error": "Missing email or password"}), 400
-    email = body["email"]
-    password = body["password"]
-    role = body.get("role", "user")  # default to "user" if not provided
+    email = form["email"]
+    password = form["password"]
+    role = form.get("role", "user")  # Default role is "user"
     if role not in ["user", "admin"]:
         return jsonify({"error": "Invalid role, must be 'user' or 'admin'"}), 400
     # Check if the user already exists

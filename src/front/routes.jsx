@@ -9,6 +9,13 @@ import { Layout } from "./pages/Layout";
 import { Home } from "./pages/Home";
 import { Single } from "./pages/Single";
 import { Demo } from "./pages/Demo";
+import Register from "./pages/Register";
+import Login from "./pages/Login";
+import DashLayout from "./pages/DashLayout";
+import ProductTable from "./pages/ProductTable";
+import AddProduct from "./pages/AddProduct";
+import UserProfile from "./pages/UserProfile";
+import EditProduct from "./pages/EditProduct";
 
 export const router = createBrowserRouter(
     createRoutesFromElements(
@@ -23,8 +30,14 @@ export const router = createBrowserRouter(
 
         {/* Nested Routes: Defines sub-routes within the BaseHome component. */}
         <Route path= "/" element={<Home />} />
-        <Route path="/single/:theId" element={ <Single />} />  {/* Dynamic route for single items */}
-        <Route path="/demo" element={<Demo />} />
+        <Route path="/register" element={<Register />} />
+        <Route path="/login" element={<Login />} />
+        <Route path="/profile" element={<UserProfile />} />
+        <Route path="/products" element={<DashLayout />} >
+          <Route path="/products" element={<ProductTable />} />
+          <Route path="/products/new" element={<AddProduct />} />
+          <Route path="/products/edit/:id" element={<EditProduct />} />
+        </Route>
       </Route>
     )
 );
