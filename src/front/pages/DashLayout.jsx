@@ -1,7 +1,17 @@
-import React from 'react'
-import { Link, Outlet } from 'react-router-dom'
+import React, { useEffect } from 'react'
+import { Link, Outlet, useNavigate } from 'react-router-dom'
+import useGlobalReducer from '../hooks/useGlobalReducer'
 
 const DashLayout = () => {
+    const { store } = useGlobalReducer();
+    const navigate = useNavigate();
+
+    useEffect(() => {
+        if (!store.user) {
+            navigate('/login', { replace: true }); // Redirect to login if not authenticated, replace history to prevent going back
+        }
+    }, [store.user]);
+
   return (
     <div className="d-flex flex-column flex-md-row h-md-full bg-light">
         {/* SideBar */}
