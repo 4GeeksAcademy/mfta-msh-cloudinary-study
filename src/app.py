@@ -180,6 +180,20 @@ def login_user():
     return jsonify({"access_token": access_token, "user": user.serialize()}), 200
 
 
+# User profile endpoint
+@app.route('/users/profile', methods=['GET'])
+@jwt_required()
+def get_user_profile():
+    """
+    Returns the profile of the currently logged-in user
+    """
+    current_user = get_jwt_identity()
+    user = User.query.get(int(current_user))
+    if not user:
+        return jsonify({"error": "User not found"}), 404
+    return jsonify({"user": user.serialize()}), 200
+
+
 # Product create endpoint
 # Images: receive an image file and upload it to Cloudinary
 @app.route('/products', methods=['POST'])
